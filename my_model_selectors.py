@@ -6,6 +6,7 @@ import numpy as np
 from hmmlearn.hmm import GaussianHMM
 from sklearn.model_selection import KFold
 from asl_utils import combine_sequences
+import sys
 
 
 class ModelSelector(object):
@@ -75,9 +76,29 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
+        max_model = None
+        min_BIC= sys.maxsize
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            hmm_model = self.base_model(num_states)
+            if hmm_model == None:
+                continue
+            try:
+                logL = hmm_model.score(self.X, self.lengths)
+                d = hmm_model.n_features
+                p = num_states ** 2 + 2 * num_states * d - 1
+                logN = math.log(len(self.X))
+                BIC = -2 * logL + p * logN
+                # the smaller the BIC, the better the model
+                if BIC < min_BIC:
+                    min_BIC = BIC
+                    max_model = hmm_model
+            except:
+                if self.verbose:
+                    print("No BIC score!")
+        if max_model == None:
+            return self.base_model(self.n_constant)
+        return max_model
 
 
 class SelectorDIC(ModelSelector):
@@ -93,8 +114,48 @@ class SelectorDIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        max_model = None
+        max_DIC= -sys.maxsize - 1
+        # TODO implement model selection based on BIC scores
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            hmm_model = self.base_model(num_states)
+            if hmm_model == None:
+                continue
+            try:
+                logL = hmm_model.score(self.X, self.lengths)
+                # get average log likelihood for other words
+                logL_average_other = self.OtherWordsAverageScore(hmm_model)
+                if logL_average_other == None:
+                    continue
+                DIC = logL - logL_average_other
+                # the bigger the DIC, the better the model
+                if DIC > max_DIC:
+                    max_DIC = DIC
+                    max_model = hmm_model
+            except:
+                if self.verbose:
+                    print("No DIC score!")
+        if max_model == None:
+            return self.base_model(self.n_constant)
+        return max_model
 
+    def OtherWordsAverageScore(self, model):
+        logL_sum = 0
+        n = 0
+        for word, (X, lengths) in self.hwords.items():
+            if word == self.this_word:
+                continue
+            try:
+                logL = model.score(X, lengths)
+                logL_sum += logL
+                n += 1
+            except:
+                if self.verbose:
+                    print("No Log Likelihood for ", word)
+        if n != 0:
+            logL_average = logL_sum / n
+            return logL_average
+        return None
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
@@ -103,6 +164,46 @@ class SelectorCV(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        
+        max_model = None
+        max_logL = -sys.maxsize - 1
+        for num_states in range(self.min_n_components, self.max_n_components + 1):
+            if len(self.lengths) < 3:
+                hmm_model = self.base_model(num_states)
+                try:
+                    logL = hmm_model.score(self.X, self.lengths)
+                    if logL > max_logL:
+                        max_logL = logL
+                        max_model = hmm_model                    
+                except:
+                    if self.verbose:
+                        print("No log likelihood score!")
+                continue
+            split_method = KFold()
+            logL_sum = 0
+            n = 0
+            for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                X_train, lengths_train = combine_sequences(cv_train_idx, self.sequences)
+                X_test, lengths_test = combine_sequences(cv_test_idx, self.sequences)
+                try:
+                    hmm_model = GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000,
+                                            random_state=self.random_state, verbose=False).fit(X_train, lengths_train)
+                    logL = hmm_model.score(X_test, lengths_test)
+                    logL_sum += logL
+                    n += 1
+                    if self.verbose:
+                        print("model created for {} with {} states".format(self.this_word, num_states))
+                except:
+                    if self.verbose:
+                        print("failure on {} with {} states".format(self.this_word, num_states))
+            if n != 0:
+                logL_average = logL_sum / n
+                if logL_average > max_logL:
+                    max_logL = logL_average
+                    max_model = hmm_model
+        if max_model == None:
+            return self.base_model(self.n_constant)
+        return max_model
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+
+
